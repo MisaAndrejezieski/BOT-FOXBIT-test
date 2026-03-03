@@ -273,6 +273,10 @@ class FoxbitBot:
         except KeyboardInterrupt:
             self.mostrar_relatorio()
     
+    def executar_manual(self):
+        """Loop para acompanhamento com operações manuais"""
+        executar_acompanhamento_manual(self)
+    
     def mostrar_relatorio(self):
         """Mostra relatório da simulação"""
         print("\n" + "="*70)
@@ -311,6 +315,97 @@ class FoxbitBot:
         print("✅ Simulação encerrada")
         print("="*70)
 
+    def compra_manual(self, quantidade_btc, preco_compra):
+        """Compra manual com quantidade customizável"""
+        if self.position:
+            print(f"❌ Já possui uma posição ativa! Venda primeiro.")
+            return False
+        
+        if quantidade_btc <= 0:
+            print(f"❌ Quantidade deve ser maior que zero")
+            return False
+        
+        valor_gasto = quantidade_btc * preco_compra
+        
+        if valor_gasto > self.capital:
+            print(f"❌ Capital insuficiente!")
+            print(f"   Disponível: R$ {self.capital:,.2f}")
+            print(f"   Necessário: R$ {valor_gasto:,.2f}")
+            return False
+        
+        self.position = {
+            'price': preco_compra,
+            'quantity': quantidade_btc,
+            'time': datetime.now(),
+            'variacao': 0,
+            'manual': True
+        }
+        
+        self.capital -= valor_gasto
+        self.trades_today += 1
+        
+        print(f"\n🟢 COMPRA MANUAL REALIZADA!")
+        print(f"   Preço: R$ {preco_compra:,.2f}")
+        print(f"   Quantidade: {quantidade_btc:.6f} BTC")
+        print(f"   Valor gasto: R$ {valor_gasto:,.2f}")
+        print(f"   Capital restante: R$ {self.capital:,.2f}")
+        print(f"   Hora: {datetime.now().strftime('%H:%M:%S')}")
+        
+        return True
+    
+    def venda_manual(self, preco_venda):
+        """Venda manual da posição atual"""
+        if not self.position:
+            print(f"❌ Não há posição ativa para vender!")
+            return False
+        
+        valor_venda = self.position['quantity'] * preco_venda
+        valor_compra = self.position['quantity'] * self.position['price']
+        lucro_abs = valor_venda - valor_compra
+        lucro_percent = (lucro_abs / valor_compra) * 100
+        
+        self.capital += valor_venda
+        
+        # Registra trade manual
+        trade = {
+            'compra_price': self.position['price'],
+            'venda_price': preco_venda,
+            'quantidade': self.position['quantity'],
+            'lucro_percent': lucro_percent,
+            'lucro_abs': lucro_abs,
+            'tempo': (datetime.now() - self.position['time']).total_seconds() / 60,
+            'data': datetime.now(),
+            'manual': True
+        }
+        self.total_trades.append(trade)
+        
+        print(f"\n🔴 VENDA MANUAL REALIZADA!")
+        print(f"   Preço: R$ {preco_venda:,.2f}")
+        print(f"   Quantidade vendida: {self.position['quantity']:.6f} BTC")
+        print(f"   Valor ganho: R$ {valor_venda:,.2f}")
+        print(f"   Lucro: R$ {lucro_abs:+,.2f} ({lucro_percent:+.2f}%)")
+        print(f"   Tempo em posição: {trade['tempo']:.1f} minutos")
+        print(f"   Capital agora: R$ {self.capital:,.2f}")
+        print(f"   Hora: {datetime.now().strftime('%H:%M:%S')}")
+        
+        self.position = None
+        return True
+    
+    def menu_operador(self, preco_atual):
+        """Menu para operações manuais durante acompanhamento"""
+        print(f"\n{'='*70}")
+        print(f"💡 PREÇO ATUAL: R$ {preco_atual:,.2f}")
+        print(f"{'='*70}")
+        print("\n📋 OPÇÕES DE OPERAÇÃO:")
+        print("  [1] 🟢 Comprar manualmente")
+        print("  [2] 🔴 Vender manualmente")
+        print("  [3] 📊 Ver posição atual")
+        print("  [4] 💰 Ver capital")
+        print("  [5] 📈 Continuar acompanhando")
+        print("  [0] ❌ Encerrar")
+        print("-"*70)
+
+
 def menu():
     """Menu principal"""
     print("""
@@ -323,21 +418,120 @@ def menu():
 ║                                                          ║
 ║   📍 SEM RISCO - Apenas observação e simulação          ║
 ║   📍 Preços atualizados a cada 30 segundos              ║
+║   📍 Operações manuais disponíveis                      ║
 ║   📍 Estratégia testada com dados REAIS do mercado      ║
 ║                                                          ║
 ╠══════════════════════════════════════════════════════════╣
 ║                                                          ║
-║   Pressione ENTER para iniciar o acompanhamento         ║
-║   ou CTRL+C para encerrar                                ║
+║   [1] Modo AUTOMÁTICO (estratégia -2%/+4%)             ║
+║   [2] Modo MANUAL (você controla as operações)          ║
+║   [0] Sair                                              ║
 ║                                                          ║
 ╚══════════════════════════════════════════════════════════╝
     """)
     
-    input("   ▶️  Iniciar...")
+    opcao = input("   ▶️  Escolha uma opção: ").strip()
     
-    # Cria e executa o bot
-    bot = FoxbitBot()
-    bot.executar()
+    if opcao == "1":
+        print("\n🤖 Iniciando modo AUTOMÁTICO...")
+        bot = FoxbitBot()
+        bot.executar()
+    elif opcao == "2":
+        print("\n👤 Iniciando modo MANUAL...")
+        bot = FoxbitBot()
+        bot.executar_manual()
+    else:
+        print("   ✅ Encerrando...")
+
+
+def executar_acompanhamento_manual(bot):
+    """
+    Loop para acompanhamento com operações manuais
+    """
+    print(f"\n🔍 Conectando às APIs de preço...")
+    print("="*70)
+    
+    # Testa conexão inicial
+    preco, volume, variacao = bot.get_preco_foxbit()
+    if preco:
+        print(f"✅ Conectado! Preço atual: R$ {preco:,.2f}")
+    else:
+        print("⚠️ Usando modo offline para testes")
+    
+    input("\nPressione ENTER para começar...")
+    
+    try:
+        while True:
+            # Reseta contador diário
+            bot.reset_daily_counter()
+            
+            # Busca preço REAL
+            preco, volume, variacao = bot.get_preco_foxbit()
+            
+            if preco:
+                # Atualiza histórico
+                bot.price_history.append(preco)
+                if len(bot.price_history) > 100:
+                    bot.price_history.pop(0)
+                
+                # Mostra status
+                bot.mostrar_status(preco, variacao)
+                
+                # Menu de operações
+                bot.menu_operador(preco)
+                
+                opcao = input("   ▶️  Opção: ").strip()
+                
+                if opcao == "1":
+                    try:
+                        qtd = float(input("   Quantidade de BTC: "))
+                        preco_compra = float(input("   Preço de compra (ENTER para preço atual): ").strip() or preco)
+                        bot.compra_manual(qtd, preco_compra)
+                    except ValueError:
+                        print("   ❌ Valor inválido!")
+                
+                elif opcao == "2":
+                    try:
+                        preco_venda = float(input("   Preço de venda (ENTER para preço atual): ").strip() or preco)
+                        bot.venda_manual(preco_venda)
+                    except ValueError:
+                        print("   ❌ Valor inválido!")
+                
+                elif opcao == "3":
+                    if bot.position:
+                        lucro = (preco - bot.position['price']) / bot.position['price'] * 100
+                        print(f"\n📌 POSIÇÃO ATIVA:")
+                        print(f"   Quantidade: {bot.position['quantity']:.6f} BTC")
+                        print(f"   Preço de entrada: R$ {bot.position['price']:,.2f}")
+                        print(f"   Preço atual: R$ {preco:,.2f}")
+                        print(f"   Lucro/Prejuízo: {lucro:+.2f}%")
+                        print(f"   Valor: R$ {bot.position['quantity'] * preco:,.2f}")
+                    else:
+                        print(f"\n💤 Sem posição ativa")
+                
+                elif opcao == "4":
+                    print(f"\n💰 CAPITAL: R$ {bot.capital:,.2f}")
+                    print(f"   Capital inicial: R$ {bot.capital_inicial:,.2f}")
+                    if bot.position:
+                        print(f"   Investido: R$ {bot.position['quantity'] * bot.position['price']:,.2f}")
+                
+                elif opcao == "5":
+                    print("   ⏳ Aguardando próximo ciclo...")
+                    time.sleep(bot.config.CHECK_INTERVAL)
+                
+                elif opcao == "0":
+                    bot.mostrar_relatorio()
+                    return
+                
+                else:
+                    print("   ⚠️ Opção inválida!")
+                    time.sleep(1)
+            else:
+                print("\n❌ Erro ao buscar preços. Tentando novamente...")
+                time.sleep(5)
+            
+    except KeyboardInterrupt:
+        bot.mostrar_relatorio()
 
 if __name__ == "__main__":
     menu()
