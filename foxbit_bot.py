@@ -24,6 +24,7 @@ class FoxbitBot:
         self.trades_today = 0
         self.last_trade_date = date.today()
         self.total_trades = []
+        self.preco_ref_12h = None  # Preço de referência 12h (para comparação inicial)
         
         print("\n" + "="*70)
         print("🤖 BOT FOXBIT - PREÇOS EM TEMPO REAL")
@@ -131,31 +132,46 @@ class FoxbitBot:
         except:
             return 0
     
-    def analisar_compra(self, preco_atual):
-        """Analisa se deve comprar baseado na queda"""
+    def analisar_compra(self, preco_atual, variacao_12h):
+        """Analisa se deve comprar baseado na queda desde preço de referência"""
         if len(self.price_history) < 2:
             return False, 0
         
-        # Calcula variação percentual
-        variacao = (preco_atual - self.price_history[-2]) / self.price_history[-2] * 100
+        # Definir preço de referência:
+        # - Se tem posição aberta: referência é o preço de compra (valor investido)
+        # - Se não tem: referência é a variação 12h
+        if self.position:
+            preco_ref = self.position['price']
+            variacao = (preco_atual - preco_ref) / preco_ref * 100
+        else:
+            # Sem posição: usa a variação de 12h como referência
+            variacao = variacao_12h
         
+        # Compra se queda >= 2% (BUY_THRESHOLD = -2.0)
         if variacao <= self.config.BUY_THRESHOLD:
             return True, variacao
         return False, variacao
     
     def analisar_venda(self, preco_atual):
-        """Analisa se deve vender baseado no lucro"""
+        """Analisa se deve vender baseado no lucro de 4% do valor investido"""
         if not self.position:
             return False, 0
         
+        # Sempre compara com o preço de compra (valor investido)
         buy_price = self.position['price']
         lucro = (preco_atual - buy_price) / buy_price * 100
         
+        # Vende quando lucro >= 4% (SELL_THRESHOLD = 4.0)
         if lucro >= self.config.SELL_THRESHOLD:
             return True, lucro
+        # Também vende em stop loss (-3%)
         elif lucro <= self.config.STOP_LOSS:
             return True, lucro
         return False, lucro
+    
+    def atualizar_ref_12h(self, preco_atual):
+        """Atualiza preço de referência 12h (quando vende ou inicia)"""
+        self.preco_ref_12h = preco_atual
     
     def reset_daily_counter(self):
         """Reseta contador diário de trades"""
@@ -280,15 +296,21 @@ class FoxbitBot:
                     # Mostra status
                     self.mostrar_status(preco, variacao)
                     
+                    # Inicializa referência 12h na primeira execução
+                    if self.preco_ref_12h is None:
+                        self.atualizar_ref_12h(preco)
+                    
                     # Análise de trading (simulada)
                     if not self.position:
-                        comprar, variacao_atual = self.analisar_compra(preco)
+                        comprar, variacao_atual = self.analisar_compra(preco, variacao)
                         if comprar:
                             self.comprar_simulado(preco, variacao_atual)
                     else:
                         vender, lucro = self.analisar_venda(preco)
                         if vender:
                             self.vender_simulado(preco, lucro)
+                            # Reseta referência 12h após vender
+                            self.atualizar_ref_12h(preco)
                 else:
                     print("\n❌ Erro ao buscar preços. Tentando novamente...")
                 
