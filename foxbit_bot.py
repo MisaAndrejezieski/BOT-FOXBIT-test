@@ -37,7 +37,7 @@ class FoxbitBot:
     def get_preco_foxbit(self):
         """
         Busca preço REAL da Foxbit via API pública
-        Retorna: (preço, volume, variação_24h)
+        Retorna: (preço, volume, variação_12h)
         """
         try:
             # Endpoint público da Foxbit (não precisa de API Key)
@@ -73,8 +73,7 @@ class FoxbitBot:
             params = {
                 'ids': 'bitcoin',
                 'vs_currencies': 'brl',
-                'include_24hr_change': 'true',
-                'include_last_updated_at': 'true'
+                'include_market_cap_change_24h': 'true'
             }
             
             response = requests.get(url, params=params, timeout=10)
@@ -82,7 +81,7 @@ class FoxbitBot:
             if response.status_code == 200:
                 dados = response.json()
                 preco = float(dados['bitcoin']['brl'])
-                variacao = float(dados['bitcoin']['brl_24h_change'])
+                variacao = self.get_variacao_12h_coingecko()
                 
                 print("   📡 Fonte: CoinGecko")
                 return preco, 0, variacao
@@ -92,17 +91,43 @@ class FoxbitBot:
         return None, None, None
     
     def get_variacao_coingecko(self):
-        """Busca variação de 24h na CoinGecko"""
+        """Busca variação de 12h na CoinGecko"""
+        return self.get_variacao_12h_coingecko()
+    
+    def get_variacao_12h_coingecko(self):
+        """Busca variação de 12h na CoinGecko via market_chart"""
+        try:
+            url = f"{self.config.COINGECKO_URL}/coins/bitcoin/market_chart"
+            params = {
+                'vs_currency': 'brl',
+                'days': '1'
+            }
+            response = requests.get(url, params=params, timeout=5)
+            dados = response.json()
+            
+            if 'prices' in dados and len(dados['prices']) > 0:
+                precos = dados['prices']
+                # Pega preço de agora e de 12h atrás (metade do array)
+                preco_agora = precos[-1][1]
+                indice_12h = len(precos) // 2
+                preco_12h_atras = precos[indice_12h][1]
+                
+                variacao = ((preco_agora - preco_12h_atras) / preco_12h_atras) * 100
+                return variacao
+        except:
+            pass
+        
+        # Fallback para 24h se erro
         try:
             url = f"{self.config.COINGECKO_URL}/simple/price"
             params = {
                 'ids': 'bitcoin',
                 'vs_currencies': 'brl',
-                'include_24hr_change': 'true'
+                'include_market_cap_change_24h': 'true'
             }
             response = requests.get(url, params=params, timeout=5)
             dados = response.json()
-            return float(dados['bitcoin']['brl_24h_change'])
+            return float(dados['bitcoin']['brl_market_cap_change_24h']) if 'brl_market_cap_change_24h' in dados['bitcoin'] else 0
         except:
             return 0
     
@@ -196,15 +221,15 @@ class FoxbitBot:
         self.position = None
         return True
     
-    def mostrar_status(self, preco, variacao_24h):
+    def mostrar_status(self, preco, variacao_12h):
         """Mostra status atual com preços reais"""
         print("\n" + "-"*70)
         print(f"⏰ {datetime.now().strftime('%d/%m/%Y %H:%M:%S')}")
         print(f"💰 BTC/BRL: R$ {preco:,.2f}")
         
-        if variacao_24h:
-            seta = "▲" if variacao_24h > 0 else "▼"
-            print(f"📊 24h: {seta} {variacao_24h:+.2f}%")
+        if variacao_12h:
+            seta = "▲" if variacao_12h > 0 else "▼"
+            print(f"📊 12h: {seta} {variacao_12h:+.2f}%")
         
         # Mostra análise técnica
         if len(self.price_history) > 1:
