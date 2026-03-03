@@ -24,7 +24,6 @@ class FoxbitBot:
         self.trades_today = 0
         self.last_trade_date = date.today()
         self.total_trades = []
-        self.preco_ref_12h = None  # Preço de referência 12h (para comparação inicial)
         
         print("\n" + "="*70)
         print("🤖 BOT FOXBIT - PREÇOS EM TEMPO REAL")
@@ -133,24 +132,35 @@ class FoxbitBot:
             return 0
     
     def analisar_compra(self, preco_atual, variacao_12h):
-        """Analisa se deve comprar baseado na queda desde preço de referência"""
+        """Analisa se deve comprar baseado na queda desde preço de referência.
+        Retorna tuple (comprar:bool, variacao:float, percentual_capital:float).
+        percentual_capital indica fração do capital a usar na operação.
+        """
+        # Primeiro, se posição existente e já atingiu máximo de buys
+        if self.position and len(self.position.get('buys', [])) >= self.config.MAX_BUYS:
+            return False, 0, 0
+
+        # Se não há histórico suficiente, nada a fazer
         if len(self.price_history) < 2:
-            return False, 0
-        
-        # Definir preço de referência:
-        # - Se tem posição aberta: referência é o preço de compra (valor investido)
-        # - Se não tem: referência é a variação 12h
+            return False, 0, 0
+
+        # Calcula variação para decisão
         if self.position:
-            preco_ref = self.position['price']
-            variacao = (preco_atual - preco_ref) / preco_ref * 100
+            # verifica queda desde a última compra (escala-in)
+            ultimo_preco = self.position['buys'][-1]['price']
+            variacao = (preco_atual - ultimo_preco) / ultimo_preco * 100
+            # percentual de capital decresce a cada compra (50%,25%,...)
+            nivel = len(self.position['buys'])
+            percentual_capital = 0.5 ** nivel
         else:
-            # Sem posição: usa a variação de 12h como referência
+            # sem posição, usa a variação de 12h como referência
             variacao = variacao_12h
-        
-        # Compra se queda >= 2% (BUY_THRESHOLD = -2.0)
+            percentual_capital = 1.0
+
+        # Condição de compra: queda maior ou igual ao limiar (p.ex. -2%)
         if variacao <= self.config.BUY_THRESHOLD:
-            return True, variacao
-        return False, variacao
+            return True, variacao, percentual_capital
+        return False, variacao, 0
     
     def analisar_venda(self, preco_atual):
         """Analisa se deve vender baseado no lucro de 4% do valor investido"""
@@ -169,9 +179,6 @@ class FoxbitBot:
             return True, lucro
         return False, lucro
     
-    def atualizar_ref_12h(self, preco_atual):
-        """Atualiza preço de referência 12h (quando vende ou inicia)"""
-        self.preco_ref_12h = preco_atual
     
     def reset_daily_counter(self):
         """Reseta contador diário de trades"""
@@ -180,29 +187,46 @@ class FoxbitBot:
             self.trades_today = 0
             self.last_trade_date = today
     
-    def comprar_simulado(self, preco, variacao):
-        """Simula uma compra (sem dinheiro real)"""
+    def comprar_simulado(self, preco, variacao, percentual=1.0):
+        """Simula uma compra (sem dinheiro real).
+        percentual: fração do capital disponível a usar para esta compra."""
         if self.trades_today >= self.config.MAX_TRADES_PER_DAY:
             print(f"   ⚠️ Limite diário de {self.config.MAX_TRADES_PER_DAY} trades atingido")
             return False
         
-        quantidade = self.capital / preco
+        montante = self.capital * percentual
+        if montante <= 0:
+            return False
         
-        self.position = {
-            'price': preco,
-            'quantity': quantidade,
-            'time': datetime.now(),
-            'variacao': variacao
-        }
+        quantidade = montante / preco
         
-        self.capital = 0
+        if not self.position:
+            # primeira compra cria estrutura
+            self.position = {
+                'price': preco,
+                'quantity': quantidade,
+                'time': datetime.now(),
+                'variacao': variacao,
+                'buys': []
+            }
+        # registra compra na lista de buys
+        self.position['buys'].append({'price': preco, 'quantity': quantidade, 'time': datetime.now()})
+        # atualiza preço médio e quantidade total
+        total_q = sum(b['quantity'] for b in self.position['buys'])
+        total_val = sum(b['price'] * b['quantity'] for b in self.position['buys'])
+        self.position['price'] = total_val / total_q
+        self.position['quantity'] = total_q
+        
+        self.capital -= montante
         self.trades_today += 1
         
         print(f"\n🟢 SINAL DE COMPRA (SIMULADO)!")
         print(f"   Preço: R$ {preco:,.2f}")
-        print(f"   Quantidade: {quantidade:.6f} BTC")
+        print(f"   Quantidade adquirida: {quantidade:.6f} BTC")
         print(f"   Variação: {variacao:.2f}%")
-        print(f"   💰 Seria gasto: R$ {quantidade * preco:,.2f}")
+        print(f"   % capital usado: {percentual*100:.1f}%")
+        print(f"   Montante gasto: R$ {montante:,.2f}")
+        print(f"   Capital restante: R$ {self.capital:,.2f}")
         
         return True
     
@@ -254,7 +278,9 @@ class FoxbitBot:
         
         if self.position:
             lucro = (preco - self.position['price']) / self.position['price'] * 100
-            print(f"📌 Em posição: {self.position['quantity']:.6f} BTC")
+            print(f"📌 Em posição: {self.position['quantity']:.6f} BTC (média R$ {self.position['price']:,.2f})")
+            if 'buys' in self.position:
+                print(f"   Compras: {len(self.position['buys'])}")
             print(f"📈 Lucro atual: {lucro:.2f}%")
             print(f"🎯 Alvo venda: +{self.config.SELL_THRESHOLD}%")
             print(f"🛑 Stop loss: {self.config.STOP_LOSS}%")
@@ -296,21 +322,15 @@ class FoxbitBot:
                     # Mostra status
                     self.mostrar_status(preco, variacao)
                     
-                    # Inicializa referência 12h na primeira execução
-                    if self.preco_ref_12h is None:
-                        self.atualizar_ref_12h(preco)
-                    
                     # Análise de trading (simulada)
                     if not self.position:
-                        comprar, variacao_atual = self.analisar_compra(preco, variacao)
+                        comprar, variacao_atual, perc = self.analisar_compra(preco, variacao)
                         if comprar:
-                            self.comprar_simulado(preco, variacao_atual)
+                            self.comprar_simulado(preco, variacao_atual, perc)
                     else:
                         vender, lucro = self.analisar_venda(preco)
                         if vender:
                             self.vender_simulado(preco, lucro)
-                            # Reseta referência 12h após vender
-                            self.atualizar_ref_12h(preco)
                 else:
                     print("\n❌ Erro ao buscar preços. Tentando novamente...")
                 

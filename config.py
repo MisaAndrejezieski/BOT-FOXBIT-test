@@ -24,6 +24,7 @@ class Config:
     SELL_THRESHOLD = 4.0  # Vender quando subir 4%
     STOP_LOSS = -3.0      # Stop loss
     MAX_TRADES_PER_DAY = 3  # Limite diário de trades
+    MAX_BUYS = 3  # Número máximo de compras em escala (scale-in)
     
     # Configurações do bot
     CHECK_INTERVAL = 30  # Segundos entre verificações
